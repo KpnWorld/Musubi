@@ -109,7 +109,23 @@ musubi/
 
 ## 🤝 Contributing
 
-Musubi is a personal project but pull requests and issues are welcome. If you find a bug or have a feature idea, open an issue and describe what you're seeing or envisioning.
+Musubi started as a personal project but the vision is bigger than one person. If you believe Discord communities deserve a way to reach beyond their own walls — and you want to help build the network that makes that possible — you're welcome here.
+
+There's no corporate roadmap, no ticket queue, no bureaucracy. Just a bot with a clear purpose and room to grow.
+
+**Ways to get involved:**
+- 🐛 Found a bug? Open an issue and describe what happened
+- 💡 Have a feature idea? Open an issue and pitch it — if it fits the vision, let's build it
+- 🔧 Want to write code? Fork the repo, make your changes, and open a pull request
+- 📖 Good at writing? Help improve the docs, help system, or in-bot messaging
+- 🌐 Running a community? Add Musubi to your server and give us real-world feedback
+
+If you're unsure whether your idea fits, just open an issue or jump into the Discord and talk it through. The only bar is that it serves the core mission — bringing communities together.
+
+**Join the community → [discord.gg/ZMEq3QbSCY](https://discord.gg/ZMEq3QbSCY)**
+This is where users, contributors, and the development team all hang out. Bug reports, feature ideas, feedback, or just saying hi — it all happens here.
+
+> *Musubi means connection. That applies to the people building it too.*
 
 ---
 
