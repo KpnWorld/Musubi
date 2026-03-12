@@ -23,6 +23,10 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Musubi is alive.")
 
+    def do_HEAD(self) -> None:
+        self.send_response(200)
+        self.end_headers()
+
     def log_message(self, format: str, *args: object) -> None:
         pass  # Silence default HTTP request logs
 
