@@ -49,6 +49,7 @@ INITIAL_EXTENSIONS = [
     "cogs.help",
     "cogs.filter",
     "cogs.leaderboard",
+    "cogs.webcon",
 ]
 
 

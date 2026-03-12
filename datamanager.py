@@ -58,9 +58,10 @@ class DataManager:
         # Speed 2
         self.guilds: dict[str, dict] = {}   # guild_id (str) → guild data
         self.users:  dict[str, dict] = {}   # user_id  (str) → user data
-        self.sudo:         set[str] = set()
-        self.banned_users: set[str] = set()
-        self.blocklist:    set[str] = set()
+        self.sudo:            set[str] = set()
+        self.banned_users:    set[str] = set()
+        self.blocklist:       set[str] = set()
+        self.guild_blocklist: dict[str, set[str]] = {}  # guild_id → set of phrases
 
         # Fast-path tombstone — ended session IDs so bridge stops relay immediately
         # Pruned when it exceeds _TOMBSTONE_MAX to prevent unbounded growth
@@ -114,12 +115,13 @@ class DataManager:
             self._load_sudo(),
             self._load_banned_users(),
             self._load_blocklist(),
+            self._load_guild_blocklist(),
         )
         await self._clear_stale_sessions()
         log.info(
-            "Cache warmed — guilds:%d users:%d sudo:%d banned:%d blocklist:%d",
+            "Cache warmed — guilds:%d users:%d sudo:%d banned:%d blocklist:%d guild_blocklist_guilds:%d",
             len(self.guilds), len(self.users), len(self.sudo),
-            len(self.banned_users), len(self.blocklist),
+            len(self.banned_users), len(self.blocklist), len(self.guild_blocklist),
         )
 
     async def _clear_stale_sessions(self) -> None:
@@ -188,6 +190,16 @@ class DataManager:
             self.blocklist = {r["phrase"] for r in rows}
         except Exception as e:
             log.error("Failed to load blocklist: %s", e)
+
+    async def _load_guild_blocklist(self) -> None:
+        try:
+            rows = await self._get("GuildBlocklist", {"select": "guild_id,phrase"})
+            self.guild_blocklist = {}
+            for r in rows:
+                gid = r["guild_id"]
+                self.guild_blocklist.setdefault(gid, set()).add(r["phrase"])
+        except Exception as e:
+            log.error("Failed to load guild blocklist: %s", e)
 
     # ── Guilds ──────────────────────────────────────────────────────────
 
@@ -345,6 +357,36 @@ class DataManager:
             await self._delete("Blocklist", {"phrase": "not.is.null"})
         except Exception as e:
             log.error("blocklist_clear failed: %s", e)
+
+    # ── Guild Blocklist ──────────────────────────────────────────────────
+
+    def get_guild_blocklist(self, guild_id: int | str) -> set[str]:
+        return self.guild_blocklist.get(str(guild_id), set())
+
+    async def guild_blocklist_add(self, guild_id: int | str, phrase: str) -> None:
+        gid = str(guild_id)
+        self.guild_blocklist.setdefault(gid, set()).add(phrase)
+        try:
+            await self._upsert("GuildBlocklist", {"guild_id": gid, "phrase": phrase})
+        except Exception as e:
+            log.error("guild_blocklist_add failed: %s", e)
+
+    async def guild_blocklist_remove(self, guild_id: int | str, phrase: str) -> None:
+        gid = str(guild_id)
+        if gid in self.guild_blocklist:
+            self.guild_blocklist[gid].discard(phrase)
+        try:
+            await self._delete("GuildBlocklist", {"guild_id": f"eq.{gid}", "phrase": f"eq.{phrase}"})
+        except Exception as e:
+            log.error("guild_blocklist_remove failed: %s", e)
+
+    async def guild_blocklist_clear(self, guild_id: int | str) -> None:
+        gid = str(guild_id)
+        self.guild_blocklist.pop(gid, None)
+        try:
+            await self._delete("GuildBlocklist", {"guild_id": f"eq.{gid}"})
+        except Exception as e:
+            log.error("guild_blocklist_clear failed: %s", e)
 
     # ── Sessions ────────────────────────────────────────────────────────
 

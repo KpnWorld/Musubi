@@ -27,36 +27,42 @@ BRAND_COLOR    = 0xC084FC
 
 # ── Command registry ──────────────────────────────────────────────────────────
 # (name, description, syntax, category)
-# category: phone | profile | server | premium | leaderboard (callboard)
+# category: phone | profile | server | premium | leaderboard | filter
 
 COMMANDS: list[tuple[str, str, str | None, str]] = [
     # Phone
-    ("call",             "Search for another server to connect with.",              "/call",                     "phone"),
-    ("hangup",           "End your current call or cancel a search.",               "/hangup",                   "phone"),
-    ("anonymous",        "Toggle anonymous mode — hide your name and avatar.",      "/anonymous",                "phone"),
-    ("friendme",         "Send your Discord tag to the other server.",              "/friendme",                 "phone"),
+    ("call",                "Search for another server to connect with.",               "/call",                          "phone"),
+    ("hangup",              "End your current call or cancel a search.",                "/hangup",                        "phone"),
+    ("anonymous",           "Toggle anonymous mode — hide your name and avatar.",       "/anonymous",                     "phone"),
+    ("friendme",            "Send your Discord tag to the other server.",               "/friendme",                      "phone"),
     # Profile
-    ("me status",        "View your personal profile and settings.",                "/me status",                "profile"),
-    ("me name",          "Set a custom display name during calls. ✨ Premium",      "/me name <nickname>",       "profile"),
-    ("me avatar",        "Set a custom avatar for calls. ✨ Premium",               "/me avatar <url>",          "profile"),
-    ("me reset",         "Reset your name and avatar to Discord defaults.",         "/me reset",                 "profile"),
+    ("me status",           "View your personal profile and settings.",                 "/me status",                     "profile"),
+    ("me name",             "Set a custom display name during calls. ✨ Premium",       "/me name <nickname>",            "profile"),
+    ("me avatar",           "Set a custom avatar for calls. ✨ Premium",                "/me avatar <url>",               "profile"),
+    ("me reset",            "Reset your name and avatar to Discord defaults.",          "/me reset",                      "profile"),
     # Server
-    ("setup",            "Register this server and set a booth channel.",           "/setup <#channel>",         "server"),
-    ("setbooth",         "Change the booth channel.",                               "/setbooth <#channel>",      "server"),
-    ("unregister",       "Remove this server from Musubi.",                         "/unregister [confirm:True]","server"),
-    ("prefix server",    "Set a custom command prefix for this server.",            "/prefix server <prefix>",   "server"),
+    ("setup",               "Register this server and set a booth channel.",            "/setup <#channel>",              "server"),
+    ("setbooth",            "Change the booth channel.",                                "/setbooth <#channel>",           "server"),
+    ("unregister",          "Remove this server from Musubi.",                          "/unregister [confirm:True]",     "server"),
+    ("prefix server",       "Set a custom command prefix for this server.",             "/prefix server <prefix>",        "server"),
+    # Booth Filter
+    ("boothfilter add",     "Block words or phrases from entering your booth.",         "/boothfilter add <phrase>",      "filter"),
+    ("boothfilter remove",  "Remove a phrase from your booth filter.",                  "/boothfilter remove <phrase>",   "filter"),
+    ("boothfilter list",    "Show all phrases blocked in your booth.",                  "/boothfilter list",              "filter"),
+    ("boothfilter clear",   "Clear your entire booth filter.",                          "/boothfilter clear",             "filter"),
     # Premium
-    ("prefix self",      "Set a personal command prefix. ✨ User Premium",          "/prefix self <prefix>",     "premium"),
-    ("premium status",   "Check active premium for yourself and this server.",      "/premium status",           "premium"),
-    ("redeem",           "Redeem a premium key for yourself or this server.",       "/redeem <key>",             "premium"),
+    ("prefix self",         "Set a personal command prefix. ✨ User Premium",           "/prefix self <prefix>",          "premium"),
+    ("premium status",      "Check active premium for yourself and this server.",       "/premium status",                "premium"),
+    ("redeem",              "Redeem a premium key for yourself or this server.",        "/redeem <key>",                  "premium"),
     # Callboard
-    ("callboard",         "View the current monthly call activity leaderboard.",     "/callboard",                "leaderboard"),
+    ("callboard",           "View the current monthly call activity leaderboard.",      "/callboard",                     "leaderboard"),
 ]
 
 CATEGORY_LABELS = {
     "phone":       "📞 Phone",
     "profile":     "👤 Profile",
     "server":      "⚙️ Server",
+    "filter":      "🚫 Booth Filter",
     "premium":     "✨ Premium",
     "leaderboard": "🏆 Callboard",
 }
