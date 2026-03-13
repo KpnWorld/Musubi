@@ -26,6 +26,8 @@ log = logging.getLogger("musubi.filter")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
+# Raw Discord invite links are ALWAYS blocked from relay.
+# The only sanctioned way to share an invite is via /invite (cogs/invite.py).
 INVITE_RE      = re.compile(r"(discord\.gg|discord\.com/invite|discordapp\.com/invite)/\S+", re.IGNORECASE)
 CAPS_THRESHOLD = 0.7   # 70% uppercase triggers cap filter (min 10 alpha chars)
 FLOOD_LIMIT    = 5     # max messages allowed within FLOOD_WINDOW

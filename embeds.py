@@ -250,24 +250,26 @@ class Embeds:
     @staticmethod
     def callboard(
         rows: list[dict],
-        guilds: list[tuple[str, str | None]],  # [(name, icon_url), ...]
+        guilds: list[tuple[str, str | None, str | None]],  # [(name, icon_url, invite_url), ...]
         cycle_started: str,
     ) -> discord.Embed:
         """
         Current-cycle callboard embed.
         rows: leaderboard rows [{guild_id, xp, xp_reset_at}, ...]
-        guilds: resolved (name, icon_url) per row, same order
+        guilds: resolved (name, icon_url, invite_url) per row, same order
         cycle_started: ISO date string of cycle start
         """
         MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
         lines: list[str] = []
-        for i, (row, (name, icon_url)) in enumerate(zip(rows, guilds)):
-            medal = MEDALS[i] if i < len(MEDALS) else f"`#{i+1}`"
-            xp    = row.get("xp") or 0
-            lines.append(f"> {medal} **{name}** — `{xp:,} XP`")
+        for i, (row, (name, icon_url, invite_url)) in enumerate(zip(rows, guilds)):
+            medal      = MEDALS[i] if i < len(MEDALS) else f"`#{i+1}`"
+            xp         = row.get("xp") or 0
+            # Make server name a clickable hyperlink if we have an invite URL
+            label      = f"[{name}]({invite_url})" if invite_url else f"**{name}**"
+            lines.append(f"> {medal} {label} — `{xp:,} XP`")
 
         # Use the first guild icon as thumbnail if available
-        first_icon = next((icon for _, icon in guilds if icon), None)
+        first_icon = next((icon for _, icon, _ in guilds if icon), None)
 
         embed = discord.Embed(
             description="> `🏆` *Callboard — Current Cycle*\n\n" + "\n".join(lines),
@@ -277,6 +279,61 @@ class Embeds:
         if first_icon:
             embed.set_thumbnail(url=first_icon)
         return embed
+
+    # ── Invite ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def invite_sent(server_name: str, invite_url: str, used: int, total: int) -> discord.Embed:
+        """Sent to the target side when /invite is used."""
+        return discord.Embed(
+            description=(
+                f"> `📬` *You've been invited to join **{server_name}**!*\n"
+                f"> `🔗` {invite_url}"
+            ),
+            color=BRAND_COLOR,
+        )
+
+    @staticmethod
+    def invite_confirm(server_name: str, used: int, total: int) -> discord.Embed:
+        """Ephemeral confirmation for the user who ran /invite."""
+        return discord.Embed(
+            description=(
+                f"> `✅` *Invite sent to the other server!*\n"
+                f"> `📊` *Server quota: `{used}/{total}` used today*"
+            ),
+            color=BRAND_COLOR,
+        )
+
+    @staticmethod
+    def invite_status(used: int, total: int, bank: int, is_premium: bool, xp: int) -> discord.Embed:
+        """Shows a guild's current invite quota status."""
+        tier = "`✨ Premium`" if is_premium else "`Free`"
+        lines = [
+            f"> `📊` *Used today:* `{used} / {total}`",
+            f"> `🏦` *Purchased quota:* `{bank}`",
+            f"> `✨` *Tier:* {tier}",
+            f"> `⚡` *Server XP:* `{xp:,}`",
+            "",
+            "> **Buy more invites with XP:**",
+            "> `150 XP` → +5 invites",
+            "> `200 XP` → +10 invites",
+            "> `350 XP` → +20 invites",
+        ]
+        return discord.Embed(
+            description="\n".join(lines),
+            color=BRAND_COLOR,
+        )
+
+    @staticmethod
+    def invite_bought(amount: int, xp_spent: int, bank: int, xp_remaining: int) -> discord.Embed:
+        return discord.Embed(
+            description=(
+                f"> `✅` *Purchased **+{amount} invites** for `{xp_spent} XP`!*\n"
+                f"> `🏦` *Total purchased quota: `{bank}`*\n"
+                f"> `⚡` *Server XP remaining: `{xp_remaining:,}`*"
+            ),
+            color=BRAND_COLOR,
+        )
 
     @staticmethod
     def panel(title: str, description: str, footer: Optional[str] = None) -> discord.Embed:

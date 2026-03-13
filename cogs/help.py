@@ -1,16 +1,19 @@
 """
-Project MUSUBI — cogs/help.py
-Clean minimal help system.
+Project MUSUBI — cogs/filter.py
+Global and per-guild message filtering before relay.
 
-/help          — main help embed
-/help {cmd}    — individual command info
-/help cmds     — all public commands grouped by category
+Global checks (sudo-managed):  user ban, invite links, global blocklist, caps, flood, repeat.
+Per-guild checks (admin-managed): guild-local blocklist via /boothfilter.
+
+All filtering is silent — blocked messages are dropped without user notification.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import time
+from collections import defaultdict, deque
 
 import discord
 from discord.ext import commands
@@ -19,187 +22,366 @@ from datamanager import DataManager
 from botprotocol import MusubiBot
 from embeds import Embeds
 
-log = logging.getLogger("musubi.help")
+log = logging.getLogger("musubi.filter")
 
-SUPPORT_SERVER = "https://discord.gg/ZMEq3QbSCY"
-MADE_BY        = "†spector"
-BRAND_COLOR    = 0xC084FC
+# ── Constants ─────────────────────────────────────────────────────────────────
 
-# ── Command registry ──────────────────────────────────────────────────────────
-# (name, description, syntax, category)
-# category: phone | profile | server | premium | leaderboard | filter
-
-COMMANDS: list[tuple[str, str, str | None, str]] = [
-    # Phone
-    ("call",                "Search for another server to connect with.",               "/call",                          "phone"),
-    ("hangup",              "End your current call or cancel a search.",                "/hangup",                        "phone"),
-    ("anonymous",           "Toggle anonymous mode — hide your name and avatar.",       "/anonymous",                     "phone"),
-    ("friendme",            "Send your Discord tag to the other server.",               "/friendme",                      "phone"),
-    # Profile
-    ("me status",           "View your personal profile and settings.",                 "/me status",                     "profile"),
-    ("me name",             "Set a custom display name during calls. ✨ Premium",       "/me name <nickname>",            "profile"),
-    ("me avatar",           "Set a custom avatar for calls. ✨ Premium",                "/me avatar <url>",               "profile"),
-    ("me reset",            "Reset your name and avatar to Discord defaults.",          "/me reset",                      "profile"),
-    # Server
-    ("setup",               "Register this server and set a booth channel.",            "/setup <#channel>",              "server"),
-    ("setbooth",            "Change the booth channel.",                                "/setbooth <#channel>",           "server"),
-    ("unregister",          "Remove this server from Musubi.",                          "/unregister [confirm:True]",     "server"),
-    ("prefix server",       "Set a custom command prefix for this server.",             "/prefix server <prefix>",        "server"),
-    # Booth Filter
-    ("boothfilter add",     "Block words or phrases from entering your booth.",         "/boothfilter add <phrase>",      "filter"),
-    ("boothfilter remove",  "Remove a phrase from your booth filter.",                  "/boothfilter remove <phrase>",   "filter"),
-    ("boothfilter list",    "Show all phrases blocked in your booth.",                  "/boothfilter list",              "filter"),
-    ("boothfilter clear",   "Clear your entire booth filter.",                          "/boothfilter clear",             "filter"),
-    # Premium
-    ("prefix self",         "Set a personal command prefix. ✨ User Premium",           "/prefix self <prefix>",          "premium"),
-    ("premium status",      "Check active premium for yourself and this server.",       "/premium status",                "premium"),
-    ("redeem",              "Redeem a premium key for yourself or this server.",        "/redeem <key>",                  "premium"),
-    # Callboard
-    ("callboard",           "View the current monthly call activity leaderboard.",      "/callboard",                     "leaderboard"),
-]
-
-CATEGORY_LABELS = {
-    "phone":       "📞 Phone",
-    "profile":     "👤 Profile",
-    "server":      "⚙️ Server",
-    "filter":      "🚫 Booth Filter",
-    "premium":     "✨ Premium",
-    "leaderboard": "🏆 Callboard",
-}
+# Raw Discord invite links are ALWAYS blocked from relay.
+# The only sanctioned way to share an invite is via /invite (cogs/invite.py).
+INVITE_RE      = re.compile(r"(discord\.gg|discord\.com/invite|discordapp\.com/invite)/\S+", re.IGNORECASE)
+CAPS_THRESHOLD = 0.7   # 70% uppercase triggers cap filter (min 10 alpha chars)
+FLOOD_LIMIT    = 5     # max messages allowed within FLOOD_WINDOW
+FLOOD_WINDOW   = 8.0   # seconds
+REPEAT_LIMIT   = 3     # same message N times in a row triggers block
 
 
-def _make_main_embed(bot_avatar: str | None = None) -> discord.Embed:
-    embed = discord.Embed(title="Musubi Help", color=BRAND_COLOR)
-    embed.set_author(name="Need help? We've got you covered.")
-    if bot_avatar:
-        embed.set_thumbnail(url=bot_avatar)
-    embed.description = (
-        "> `⚙️` *New here? Start with these two commands:*\n"
-        "```\n@Musubi setup   — register your server and set a booth channel\n"
-        "@Musubi call    — dial into the network and connect with another server\n```\n"
-        "> *Use `/help cmds` to see all available commands*\n"
-        "> *Use `/help <command>` for details on a specific command*\n"
-        "> *Questions? Join our support server:*\n"
-        f"> {SUPPORT_SERVER}"
-    )
-    embed.set_footer(text=f"❣️ Made by {MADE_BY}")
-    return embed
-
-
-def _make_cmd_embed(name: str, description: str, syntax: str | None, bot_avatar: str | None = None) -> discord.Embed:
-    embed = discord.Embed(title="Musubi Help", color=BRAND_COLOR)
-    if bot_avatar:
-        embed.set_thumbnail(url=bot_avatar)
-    desc = f"> `/{name}` — *{description}*"
-    if syntax:
-        desc += f"\n```\nSyntax: {syntax}\n```"
-    embed.description = desc
-    embed.set_footer(text=f"❣️ Made by {MADE_BY}")
-    return embed
-
-
-def _make_cmds_embed(bot_avatar: str | None = None) -> discord.Embed:
-    embed = discord.Embed(title="Musubi — All Commands", color=BRAND_COLOR)
-    if bot_avatar:
-        embed.set_thumbnail(url=bot_avatar)
-
-    # Group commands by category in defined order
-    grouped: dict[str, list[tuple[str, str, str | None, str]]] = {k: [] for k in CATEGORY_LABELS}
-    for entry in COMMANDS:
-        cat = entry[3]
-        if cat in grouped:
-            grouped[cat].append(entry)
-
-    for cat_key, label in CATEGORY_LABELS.items():
-        entries = grouped[cat_key]
-        if entries:
-            lines = "\n".join(f"> `/{n}` — *{d}*" for n, d, _, _ in entries)
-            embed.add_field(name=label, value=lines, inline=False)
-
-    embed.set_footer(text=f"❣️ Made by {MADE_BY}  •  /help <command> for details")
-    return embed
-
-
-class Help(commands.Cog):
+class FilterCog(commands.Cog, name="Filter"):
 
     def __init__(self, bot: MusubiBot) -> None:
         self.bot  = bot
         self.data: DataManager = bot.data
 
-    @commands.hybrid_command(name="help", description="Get help with Musubi commands.")
-    async def help(
+        # Per-user spam tracking
+        self._flood_tracker:  defaultdict[int, deque[float]] = defaultdict(lambda: deque(maxlen=FLOOD_LIMIT))
+        self._repeat_tracker: dict[int, tuple[str, int]]     = {}
+
+    # ── Public filter method (called by bridge.py) ────────────────────────────
+
+    def should_block(self, message: discord.Message) -> bool:
+        """Returns True if the message should be silently dropped."""
+        content   = message.content or ""
+        author_id = message.author.id
+        guild_id  = str(message.guild.id) if message.guild else None
+
+        if self.data.is_user_banned(author_id):
+            log.info("Filter:banned — user:%d", author_id)
+            return True
+
+        if self._is_invite(content):
+            log.info("Filter:invite — user:%d", author_id)
+            return True
+
+        if self._is_blocklisted(content):
+            log.info("Filter:blocklist — user:%d", author_id)
+            return True
+
+        if guild_id and self._is_guild_blocklisted(content, guild_id):
+            log.info("Filter:guild_blocklist — user:%d guild:%s", author_id, guild_id)
+            return True
+
+        if self._is_caps(content):
+            log.info("Filter:caps — user:%d", author_id)
+            return True
+
+        if self._is_flood(author_id):
+            log.info("Filter:flood — user:%d", author_id)
+            return True
+
+        if self._is_repeat(author_id, content):
+            log.info("Filter:repeat — user:%d", author_id)
+            return True
+
+        return False
+
+    # ── Filter checks ─────────────────────────────────────────────────────────
+
+    def _is_invite(self, content: str) -> bool:
+        return bool(INVITE_RE.search(content))
+
+    def _is_blocklisted(self, content: str) -> bool:
+        lower = content.lower()
+        return any(word in lower for word in self.data.blocklist)
+
+    def _is_guild_blocklisted(self, content: str, guild_id: str) -> bool:
+        phrases = self.data.get_guild_blocklist(guild_id)
+        if not phrases:
+            return False
+        lower = content.lower()
+        return any(phrase in lower for phrase in phrases)
+
+    def _is_caps(self, content: str) -> bool:
+        letters = [c for c in content if c.isalpha()]
+        if len(letters) < 10:
+            return False
+        return sum(1 for c in letters if c.isupper()) / len(letters) >= CAPS_THRESHOLD
+
+    def _is_flood(self, user_id: int) -> bool:
+        """
+        Returns True if the user has sent FLOOD_LIMIT or more messages
+        within FLOOD_WINDOW seconds. The timestamp is only appended after
+        the check so the triggering message itself is correctly blocked.
+        """
+        now = time.monotonic()
+        dq  = self._flood_tracker[user_id]
+
+        if len(dq) >= FLOOD_LIMIT and (now - dq[0]) <= FLOOD_WINDOW:
+            return True
+
+        dq.append(now)
+        return False
+
+    def _is_repeat(self, user_id: int, content: str) -> bool:
+        if not content:
+            return False
+        last_msg, count = self._repeat_tracker.get(user_id, ("", 0))
+        if content.strip().lower() == last_msg:
+            count += 1
+        else:
+            count = 1
+        self._repeat_tracker[user_id] = (content.strip().lower(), count)
+        return count >= REPEAT_LIMIT
+
+    # ── /filter commands (sudo only) ──────────────────────────────────────────
+
+    def _is_sudo(self, ctx: commands.Context[MusubiBot]) -> bool:
+        return self.data.is_sudo(ctx.author.id)
+
+    @commands.hybrid_group(name="filter", description="Manage the global message filter.")
+    @discord.app_commands.default_permissions(administrator=True)
+    async def filter_group(self, ctx: commands.Context[MusubiBot]) -> None:
+        if ctx.invoked_subcommand is None:
+            await ctx.send(
+                embed=Embeds.info("Available subcommands: `add`, `remove`, `list`, `clear`"),
+                ephemeral=True,
+            )
+
+    @filter_group.command(name="add", description="Add one or more phrases to the global blocklist.")
+    async def filter_add(
         self,
         ctx: commands.Context[MusubiBot],
-        cmd: str | None = None,
+        *,
+        phrase: str,
     ) -> None:
         """
-        Get help with Musubi.
+        Add one or more comma-separated words or phrases to the global blocklist.
 
         Parameters
         ----------
-        cmd: str
-            A command name for detailed help, or 'cmds' to list all commands.
+        phrase: str
+            Comma-separated words or phrases to block (e.g. badword, another phrase).
         """
-        avatar = str(self.bot.user.display_avatar.url) if self.bot.user else None
-
-        if cmd is None:
-            await ctx.send(embed=_make_main_embed(avatar), ephemeral=True)
+        if not self._is_sudo(ctx):
+            await ctx.send(embed=Embeds.error("You don't have permission to use this command."), ephemeral=True)
             return
 
-        if cmd.lower() == "cmds":
-            await ctx.send(embed=_make_cmds_embed(avatar), ephemeral=True)
+        entries = [p.strip().lower() for p in phrase.split(",") if p.strip()]
+        if not entries:
+            await ctx.send(embed=Embeds.error("No valid phrases provided."), ephemeral=True)
             return
 
-        query = cmd.lower().strip()
-        match = next(
-            ((n, d, s) for n, d, s, _ in COMMANDS if n.lower() == query),
-            None,
+        for entry in entries:
+            await self.data.blocklist_add(entry)
+
+        added = ", ".join(f"`{e}`" for e in entries)
+        log.info("Filter:add — %s by %d", entries, ctx.author.id)
+        await ctx.send(
+            embed=Embeds.action(f"Added to global blocklist: {added}", ctx.author),
+            ephemeral=True,
         )
 
-        if not match:
+    @filter_group.command(name="remove", description="Remove a word or phrase from the global blocklist.")
+    async def filter_remove(
+        self,
+        ctx: commands.Context[MusubiBot],
+        *,
+        phrase: str,
+    ) -> None:
+        """
+        Remove a word or phrase from the global blocklist.
+
+        Parameters
+        ----------
+        phrase: str
+            The exact word or phrase to remove.
+        """
+        if not self._is_sudo(ctx):
+            await ctx.send(embed=Embeds.error("You don't have permission to use this command."), ephemeral=True)
+            return
+
+        phrase = phrase.lower().strip()
+        if phrase not in self.data.blocklist:
+            await ctx.send(embed=Embeds.error(f"`{phrase}` is not in the global blocklist."), ephemeral=True)
+            return
+
+        await self.data.blocklist_remove(phrase)
+        log.info("Filter:remove — '%s' by %d", phrase, ctx.author.id)
+        await ctx.send(
+            embed=Embeds.action(f"`{phrase}` removed from the global blocklist.", ctx.author),
+            ephemeral=True,
+        )
+
+    @filter_group.command(name="list", description="Show all globally blocked words and phrases.")
+    async def filter_list(self, ctx: commands.Context[MusubiBot]) -> None:
+        """List all entries currently in the global blocklist."""
+        if not self._is_sudo(ctx):
+            await ctx.send(embed=Embeds.error("You don't have permission to use this command."), ephemeral=True)
+            return
+
+        if not self.data.blocklist:
+            await ctx.send(embed=Embeds.info("The global blocklist is empty."), ephemeral=True)
+            return
+
+        entries = "\n".join(f"> `{w}`" for w in sorted(self.data.blocklist))
+        await ctx.send(embed=Embeds.blocklist(entries, len(self.data.blocklist)), ephemeral=True)
+
+    @filter_group.command(name="clear", description="Clear the entire global blocklist.")
+    async def filter_clear(self, ctx: commands.Context[MusubiBot]) -> None:
+        """Remove all entries from the global blocklist."""
+        if not self._is_sudo(ctx):
+            await ctx.send(embed=Embeds.error("You don't have permission to use this command."), ephemeral=True)
+            return
+
+        count = len(self.data.blocklist)
+        if count == 0:
+            await ctx.send(embed=Embeds.info("The global blocklist is already empty."), ephemeral=True)
+            return
+
+        await self.data.blocklist_clear()
+        log.info("Filter:clear — %d entries removed by %d", count, ctx.author.id)
+        await ctx.send(
+            embed=Embeds.action(
+                f"Global blocklist cleared — {count} entr{'y' if count == 1 else 'ies'} removed.",
+                ctx.author,
+            ),
+            ephemeral=True,
+        )
+
+    # ── /boothfilter commands (server admins) ─────────────────────────────────
+
+    def _is_manager(self, ctx: commands.Context[MusubiBot]) -> bool:
+        return (
+            isinstance(ctx.author, discord.Member)
+            and ctx.author.guild_permissions.manage_guild
+        )
+
+    @commands.hybrid_group(name="boothfilter", description="Manage your server's booth word filter.")
+    @discord.app_commands.default_permissions(manage_guild=True)
+    async def boothfilter(self, ctx: commands.Context[MusubiBot]) -> None:
+        if ctx.invoked_subcommand is None:
             await ctx.send(
-                embed=Embeds.error(
-                    f"No command called `{query}` found.\n"
-                    "Use `/help cmds` to see all available commands."
-                ),
+                embed=Embeds.info("Available subcommands: `add`, `remove`, `list`, `clear`"),
                 ephemeral=True,
             )
+
+    @boothfilter.command(name="add", description="Block words or phrases from entering your booth.")
+    async def boothfilter_add(
+        self,
+        ctx: commands.Context[MusubiBot],
+        *,
+        phrase: str,
+    ) -> None:
+        """
+        Add one or more comma-separated words or phrases to your server's booth filter.
+        Any message containing these words will be silently blocked before it reaches your server.
+
+        Parameters
+        ----------
+        phrase: str
+            Comma-separated words or phrases to block (e.g. badword, another phrase).
+        """
+        if not ctx.guild:
+            await ctx.send(embed=Embeds.error("This command can only be used inside a server."), ephemeral=True)
+            return
+        if not self._is_manager(ctx):
+            await ctx.send(embed=Embeds.error("You need the **Manage Server** permission to use this command."), ephemeral=True)
+            return
+        if not self.data.is_guild_registered(ctx.guild.id):
+            await ctx.send(embed=Embeds.error("This server isn't registered with Musubi yet. Run `/setup` first."), ephemeral=True)
             return
 
-        await ctx.send(embed=_make_cmd_embed(*match, bot_avatar=avatar), ephemeral=True)
-
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message) -> None:
-        """Reply with prefix info when the bot is @mentioned with no other content."""
-        if message.author.bot:
-            return
-        assert self.bot.user is not None
-        pattern = rf"^<@!?{self.bot.user.id}>\s*$"
-        if not re.match(pattern, message.content.strip()):
+        entries = [p.strip().lower() for p in phrase.split(",") if p.strip()]
+        if not entries:
+            await ctx.send(embed=Embeds.error("No valid phrases provided."), ephemeral=True)
             return
 
-        from main import DEFAULT_PREFIX
+        for entry in entries:
+            await self.data.guild_blocklist_add(ctx.guild.id, entry)
 
-        if message.guild:
-            g = self.data.get_guild(message.guild.id)
-            guild_prefix = f"`{g['prefix']}`" if g and g.get("prefix") else f"`{DEFAULT_PREFIX}`"
-            guild_name   = message.guild.name
-        else:
-            guild_prefix = f"`{DEFAULT_PREFIX}`"
-            guild_name   = "DM"
-
-        u           = self.data.get_user(message.author.id)
-        user_prefix = f"`{u['prefix']}`" if u.get("prefix") else "`Not set`"
-
-        embed = discord.Embed(
-            description=(
-                f"> `✨` *Prefix for **{guild_name}**: {guild_prefix}*\n"
-                f"> `✨` *Your personal prefix: {user_prefix}*"
-            ),
-            color=BRAND_COLOR,
+        added = ", ".join(f"`{e}`" for e in entries)
+        log.info("BoothFilter:add — guild:%d phrases:%s by:%d", ctx.guild.id, entries, ctx.author.id)
+        await ctx.send(
+            embed=Embeds.action(f"Added to booth filter: {added}", ctx.author),
+            ephemeral=True,
         )
-        await message.channel.send(embed=embed)
+
+    @boothfilter.command(name="remove", description="Remove a word or phrase from your booth filter.")
+    async def boothfilter_remove(
+        self,
+        ctx: commands.Context[MusubiBot],
+        *,
+        phrase: str,
+    ) -> None:
+        """
+        Remove a word or phrase from your server's booth filter.
+
+        Parameters
+        ----------
+        phrase: str
+            The exact word or phrase to remove.
+        """
+        if not ctx.guild:
+            await ctx.send(embed=Embeds.error("This command can only be used inside a server."), ephemeral=True)
+            return
+        if not self._is_manager(ctx):
+            await ctx.send(embed=Embeds.error("You need the **Manage Server** permission to use this command."), ephemeral=True)
+            return
+
+        phrase = phrase.lower().strip()
+        if phrase not in self.data.get_guild_blocklist(ctx.guild.id):
+            await ctx.send(embed=Embeds.error(f"`{phrase}` is not in your booth filter."), ephemeral=True)
+            return
+
+        await self.data.guild_blocklist_remove(ctx.guild.id, phrase)
+        log.info("BoothFilter:remove — guild:%d phrase:'%s' by:%d", ctx.guild.id, phrase, ctx.author.id)
+        await ctx.send(
+            embed=Embeds.action(f"`{phrase}` removed from your booth filter.", ctx.author),
+            ephemeral=True,
+        )
+
+    @boothfilter.command(name="list", description="Show all words and phrases blocked in your booth.")
+    async def boothfilter_list(self, ctx: commands.Context[MusubiBot]) -> None:
+        """List all entries currently in this server's booth filter."""
+        if not ctx.guild:
+            await ctx.send(embed=Embeds.error("This command can only be used inside a server."), ephemeral=True)
+            return
+        if not self._is_manager(ctx):
+            await ctx.send(embed=Embeds.error("You need the **Manage Server** permission to use this command."), ephemeral=True)
+            return
+
+        phrases = self.data.get_guild_blocklist(ctx.guild.id)
+        if not phrases:
+            await ctx.send(embed=Embeds.info("Your booth filter is empty."), ephemeral=True)
+            return
+
+        entries = "\n".join(f"> `{w}`" for w in sorted(phrases))
+        await ctx.send(embed=Embeds.blocklist(entries, len(phrases)), ephemeral=True)
+
+    @boothfilter.command(name="clear", description="Clear all words and phrases from your booth filter.")
+    async def boothfilter_clear(self, ctx: commands.Context[MusubiBot]) -> None:
+        """Remove all entries from this server's booth filter."""
+        if not ctx.guild:
+            await ctx.send(embed=Embeds.error("This command can only be used inside a server."), ephemeral=True)
+            return
+        if not self._is_manager(ctx):
+            await ctx.send(embed=Embeds.error("You need the **Manage Server** permission to use this command."), ephemeral=True)
+            return
+
+        phrases = self.data.get_guild_blocklist(ctx.guild.id)
+        count = len(phrases)
+        if count == 0:
+            await ctx.send(embed=Embeds.info("Your booth filter is already empty."), ephemeral=True)
+            return
+
+        await self.data.guild_blocklist_clear(ctx.guild.id)
+        log.info("BoothFilter:clear — guild:%d %d entries removed by:%d", ctx.guild.id, count, ctx.author.id)
+        await ctx.send(
+            embed=Embeds.action(
+                f"Booth filter cleared — {count} entr{'y' if count == 1 else 'ies'} removed.",
+                ctx.author,
+            ),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: MusubiBot) -> None:
-    await bot.add_cog(Help(bot))
+    await bot.add_cog(FilterCog(bot))

@@ -20,17 +20,20 @@ log = logging.getLogger("musubi.leaderboard")
 
 
 def _resolve_guild_info(
-    bot: MusubiBot, guild_id: str
-) -> tuple[str, str | None]:
+    bot: MusubiBot, data: DataManager, guild_id: str
+) -> tuple[str, str | None, str | None]:
     """
-    Resolve (name, icon_url) for a guild_id.
+    Resolve (name, icon_url, invite_url) for a guild_id.
+    invite_url comes from the Musubi DB (set during /setup or first /invite).
     Falls back to a truncated ID if the bot isn't in that guild.
     """
-    guild = bot.get_guild(int(guild_id))
+    g          = data.get_guild(guild_id)
+    invite_url = g.get("invite_url") if g else None
+    guild      = bot.get_guild(int(guild_id))
     if guild:
         icon = str(guild.icon.url) if guild.icon else None
-        return guild.name, icon
-    return f"Server …{guild_id[-4:]}", None
+        return guild.name, icon, invite_url
+    return f"Server …{guild_id[-4:]}", None, invite_url
 
 
 class Leaderboard(commands.Cog):
@@ -55,7 +58,7 @@ class Leaderboard(commands.Cog):
             )
             return
 
-        guilds      = [_resolve_guild_info(self.bot, r["guild_id"]) for r in rows]
+        guilds      = [_resolve_guild_info(self.bot, self.data, r["guild_id"]) for r in rows]
         reset_at    = rows[0].get("xp_reset_at", "")
         cycle_start = reset_at[:10] if reset_at else "this cycle"
 

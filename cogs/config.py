@@ -99,6 +99,16 @@ class Config(commands.Cog):
             wh.url, session=self.bot.session
         )
 
+        # Create a permanent booth-channel invite for the /invite system
+        try:
+            invite = await channel.create_invite(
+                max_age=0, max_uses=0, unique=False, reason="Musubi invite system"
+            )
+            await self.data.set_guild_invite(ctx.guild.id, invite.url)
+        except (discord.Forbidden, discord.HTTPException) as e:
+            log.warning("setup: invite creation failed guild:%d — %s", ctx.guild.id, e)
+            # Non-fatal — will be lazily created on first /invite use
+
         log.info("Guild registered — id:%d booth:%d", ctx.guild.id, channel.id)
         await ctx.send(
             embed=Embeds.action(

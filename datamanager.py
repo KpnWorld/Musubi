@@ -148,6 +148,8 @@ class DataManager:
                     "prefix":        r.get("prefix"),
                     "xp":            r.get("xp") or 0,
                     "is_banned":     r.get("is_banned") or False,
+                    "invite_url":    r.get("invite_url"),
+                    "invite_quota":  r.get("invite_quota") or 0,
                 }
                 for r in rows
             }
@@ -223,6 +225,8 @@ class DataManager:
             "prefix":        None,
             "xp":            0,
             "is_banned":     False,
+            "invite_url":    None,
+            "invite_quota":  0,
         }
         try:
             await self._upsert("Guilds", {
@@ -387,6 +391,107 @@ class DataManager:
             await self._delete("GuildBlocklist", {"guild_id": f"eq.{gid}"})
         except Exception as e:
             log.error("guild_blocklist_clear failed: %s", e)
+
+    # ── Invites ─────────────────────────────────────────────────────────
+
+    DAILY_QUOTA_FREE    = 10
+    DAILY_QUOTA_PREMIUM = 30
+    XP_COSTS: dict[int, int] = {5: 150, 10: 200, 20: 350}  # invites → xp cost
+
+    async def set_guild_invite(self, guild_id: int | str, invite_url: str) -> None:
+        """Store the permanent booth-channel invite URL for a guild."""
+        gid = str(guild_id)
+        if gid in self.guilds:
+            self.guilds[gid]["invite_url"] = invite_url
+        try:
+            await self._patch("Guilds", {"guild_id": f"eq.{gid}"}, {"invite_url": invite_url})
+        except Exception as e:
+            log.error("set_guild_invite failed: %s", e)
+
+    async def add_invite_quota(self, guild_id: int | str, amount: int, xp_cost: int) -> bool:
+        """
+        Spend guild XP to buy extra invite quota.
+        Subtracts xp_cost from guild XP and adds amount to invite_quota.
+        Returns False if guild doesn't have enough XP.
+        """
+        gid = str(guild_id)
+        g   = self.guilds.get(gid)
+        if not g:
+            return False
+        current_xp = g.get("xp") or 0
+        if current_xp < xp_cost:
+            return False
+        g["xp"]           = current_xp - xp_cost
+        g["invite_quota"] = (g.get("invite_quota") or 0) + amount
+        try:
+            await self._patch("Guilds", {"guild_id": f"eq.{gid}"}, {
+                "xp":           g["xp"],
+                "invite_quota": g["invite_quota"],
+            })
+            return True
+        except Exception as e:
+            log.error("add_invite_quota failed: %s", e)
+            return False
+
+    async def get_invite_usage(self, guild_id: int | str) -> dict:
+        """
+        Return today's invite usage row for a guild.
+        Creates the row if it doesn't exist yet.
+        Rolls resets_at forward if the reset window has passed.
+        """
+        from datetime import timezone
+        gid = str(guild_id)
+        now = datetime.now(timezone.utc)
+        try:
+            rows = await self._get("InviteUsage", {"select": "*", "guild_id": f"eq.{gid}"})
+            if not rows:
+                # First time — create the row
+                midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                row = await self._insert("InviteUsage", {
+                    "guild_id":  gid,
+                    "used":      0,
+                    "resets_at": midnight.isoformat(),
+                })
+                return row
+            row = rows[0]
+            # Check if the reset window has passed
+            resets_at = datetime.fromisoformat(row["resets_at"])
+            if now >= resets_at:
+                midnight  = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                updated   = await self._patch("InviteUsage", {"guild_id": f"eq.{gid}"}, {
+                    "used":      0,
+                    "resets_at": midnight.isoformat(),
+                })
+                return updated[0] if updated else row
+            return row
+        except Exception as e:
+            log.error("get_invite_usage failed: %s", e)
+            return {"guild_id": gid, "used": 0, "resets_at": now.isoformat()}
+
+    async def increment_invite_usage(self, guild_id: int | str) -> None:
+        """Increment the daily invite use counter for a guild by 1."""
+        gid = str(guild_id)
+        try:
+            row = await self.get_invite_usage(gid)
+            await self._patch("InviteUsage", {"guild_id": f"eq.{gid}"}, {
+                "used": (row.get("used") or 0) + 1,
+            })
+        except Exception as e:
+            log.error("increment_invite_usage failed: %s", e)
+
+    async def get_invite_allowance(self, guild_id: int | str) -> tuple[int, int, int]:
+        """
+        Return (used_today, total_allowed, quota_bank) for a guild.
+        total_allowed = daily base (premium or free) + quota_bank purchases.
+        """
+        gid      = str(guild_id)
+        g        = self.guilds.get(gid)
+        is_prem  = await self.is_premium_guild(gid)
+        base     = self.DAILY_QUOTA_PREMIUM if is_prem else self.DAILY_QUOTA_FREE
+        bank     = (g.get("invite_quota") or 0) if g else 0
+        usage    = await self.get_invite_usage(gid)
+        used     = usage.get("used") or 0
+        return used, base + bank, bank
 
     # ── Sessions ────────────────────────────────────────────────────────
 

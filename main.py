@@ -50,6 +50,7 @@ INITIAL_EXTENSIONS = [
     "cogs.filter",
     "cogs.leaderboard",
     "cogs.webcon",
+    "cogs.invite",
 ]
 
 
