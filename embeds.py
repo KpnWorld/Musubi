@@ -116,6 +116,46 @@ class Embeds:
             embed.set_footer(text=f"Requested by {requester.display_name}")
         return embed
 
+    # ── Welcome ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def welcome(bot_avatar: Optional[str] = None) -> discord.Embed:
+        embed = discord.Embed(
+            title="👋 Thanks for adding Musubi!",
+            description=(
+                "> *Musubi connects your Discord server to other servers in real time "
+                "— like a phone call between communities.*\n\n"
+
+                "**⚙️ Getting Started**\n"
+                "> `1.` Run `/setup <#channel>` to register your server and set a booth channel.\n"
+                "> `2.` Head to your booth channel and run `/call` to connect with another server.\n"
+                "> `3.` Use `/hangup` to end the call at any time.\n\n"
+
+                "**🏆 Callboard**\n"
+                "> Your server earns **XP** for every message sent during a call. "
+                "Check the monthly leaderboard with `/callboard` to see how your server ranks "
+                "against others on the network.\n\n"
+
+                "**📬 Invite System**\n"
+                "> During a call, use `/invite` to send your server's invite link to the other side. "
+                "Free servers get **10 invites/day**. "
+                "Spend XP for extra quota with `/invitebuy`, "
+                "or upgrade to **Server Premium** for **30 invites/day**.\n\n"
+
+                "**✨ Free Premium**\n"
+                "> Want free premium for your server or yourself? "
+                "DM <@895767962722660372> and ask — we're happy to hook you up.\n\n"
+
+                "**📖 Need help?**\n"
+                "> Run `/help cmds` for a full command list, or `/help <command>` for details."
+            ),
+            color=BRAND_COLOR,
+        )
+        if bot_avatar:
+            embed.set_thumbnail(url=bot_avatar)
+        embed.set_footer(text="❣️ Made by †spector  •  /help to get started")
+        return embed
+
     # ── Premium ──────────────────────────────────────────────────────────────
 
     @staticmethod
@@ -250,26 +290,17 @@ class Embeds:
     @staticmethod
     def callboard(
         rows: list[dict],
-        guilds: list[tuple[str, str | None, str | None]],  # [(name, icon_url, invite_url), ...]
+        guilds: list[tuple[str, str | None]],
         cycle_started: str,
     ) -> discord.Embed:
-        """
-        Current-cycle callboard embed.
-        rows: leaderboard rows [{guild_id, xp, xp_reset_at}, ...]
-        guilds: resolved (name, icon_url, invite_url) per row, same order
-        cycle_started: ISO date string of cycle start
-        """
         MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
         lines: list[str] = []
-        for i, (row, (name, icon_url, invite_url)) in enumerate(zip(rows, guilds)):
-            medal      = MEDALS[i] if i < len(MEDALS) else f"`#{i+1}`"
-            xp         = row.get("xp") or 0
-            # Make server name a clickable hyperlink if we have an invite URL
-            label      = f"[{name}]({invite_url})" if invite_url else f"**{name}**"
-            lines.append(f"> {medal} {label} — `{xp:,} XP`")
+        for i, (row, (name, icon_url)) in enumerate(zip(rows, guilds)):
+            medal = MEDALS[i] if i < len(MEDALS) else f"`#{i+1}`"
+            xp    = row.get("xp") or 0
+            lines.append(f"> {medal} **{name}** — `{xp:,} XP`")
 
-        # Use the first guild icon as thumbnail if available
-        first_icon = next((icon for _, icon, _ in guilds if icon), None)
+        first_icon = next((icon for _, icon in guilds if icon), None)
 
         embed = discord.Embed(
             description="> `🏆` *Callboard — Current Cycle*\n\n" + "\n".join(lines),
@@ -279,61 +310,6 @@ class Embeds:
         if first_icon:
             embed.set_thumbnail(url=first_icon)
         return embed
-
-    # ── Invite ───────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def invite_sent(server_name: str, invite_url: str, used: int, total: int) -> discord.Embed:
-        """Sent to the target side when /invite is used."""
-        return discord.Embed(
-            description=(
-                f"> `📬` *You've been invited to join **{server_name}**!*\n"
-                f"> `🔗` {invite_url}"
-            ),
-            color=BRAND_COLOR,
-        )
-
-    @staticmethod
-    def invite_confirm(server_name: str, used: int, total: int) -> discord.Embed:
-        """Ephemeral confirmation for the user who ran /invite."""
-        return discord.Embed(
-            description=(
-                f"> `✅` *Invite sent to the other server!*\n"
-                f"> `📊` *Server quota: `{used}/{total}` used today*"
-            ),
-            color=BRAND_COLOR,
-        )
-
-    @staticmethod
-    def invite_status(used: int, total: int, bank: int, is_premium: bool, xp: int) -> discord.Embed:
-        """Shows a guild's current invite quota status."""
-        tier = "`✨ Premium`" if is_premium else "`Free`"
-        lines = [
-            f"> `📊` *Used today:* `{used} / {total}`",
-            f"> `🏦` *Purchased quota:* `{bank}`",
-            f"> `✨` *Tier:* {tier}",
-            f"> `⚡` *Server XP:* `{xp:,}`",
-            "",
-            "> **Buy more invites with XP:**",
-            "> `150 XP` → +5 invites",
-            "> `200 XP` → +10 invites",
-            "> `350 XP` → +20 invites",
-        ]
-        return discord.Embed(
-            description="\n".join(lines),
-            color=BRAND_COLOR,
-        )
-
-    @staticmethod
-    def invite_bought(amount: int, xp_spent: int, bank: int, xp_remaining: int) -> discord.Embed:
-        return discord.Embed(
-            description=(
-                f"> `✅` *Purchased **+{amount} invites** for `{xp_spent} XP`!*\n"
-                f"> `🏦` *Total purchased quota: `{bank}`*\n"
-                f"> `⚡` *Server XP remaining: `{xp_remaining:,}`*"
-            ),
-            color=BRAND_COLOR,
-        )
 
     @staticmethod
     def panel(title: str, description: str, footer: Optional[str] = None) -> discord.Embed:
@@ -345,3 +321,55 @@ class Embeds:
         if footer:
             embed.set_footer(text=footer)
         return embed
+
+    # ── Invite ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def invite_sent(guild_name: str, invite_url: str, used: int, total: int) -> discord.Embed:
+        embed = discord.Embed(
+            description=(
+                f"> `📬` *Invite from **{guild_name}***\n"
+                f"> {invite_url}"
+            ),
+            color=BRAND_COLOR,
+        )
+        embed.set_footer(text=f"Invite {used}/{total} used today")
+        return embed
+
+    @staticmethod
+    def invite_confirm(guild_name: str, used: int, total: int) -> discord.Embed:
+        return discord.Embed(
+            description=f"> `✅` *Invite sent for **{guild_name}**. (`{used}/{total}` used today)*",
+            color=BRAND_COLOR,
+        )
+
+    @staticmethod
+    def invite_status(used: int, total: int, bank: int, is_premium: bool, xp: int) -> discord.Embed:
+        tier   = "`✨ Premium`" if is_premium else "`Free`"
+        base   = 30 if is_premium else 10
+        embed  = discord.Embed(
+            description=(
+                f"> `📬` *Invite Quota Status*\n\n"
+                f"> `📊` *Used today:* `{used}/{total}`\n"
+                f"> `🎁` *Base quota:* `{base}` ({tier})\n"
+                f"> `🏦` *Purchased bank:* `{bank}`\n"
+                f"> `✨` *Server XP:* `{xp:,}`\n\n"
+                "> **Buy more quota with `/invitebuy`:**\n"
+                "> `5 invites` → 150 XP\n"
+                "> `10 invites` → 200 XP\n"
+                "> `20 invites` → 350 XP"
+            ),
+            color=BRAND_COLOR,
+        )
+        return embed
+
+    @staticmethod
+    def invite_bought(amount: int, xp_cost: int, new_bank: int, new_xp: int) -> discord.Embed:
+        return discord.Embed(
+            description=(
+                f"> `✅` *Purchased **+{amount} invites** for `{xp_cost} XP`.*\n"
+                f"> `🏦` *Purchased bank:* `{new_bank}`\n"
+                f"> `✨` *Remaining XP:* `{new_xp:,}`"
+            ),
+            color=BRAND_COLOR,
+        )

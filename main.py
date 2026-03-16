@@ -38,7 +38,7 @@ if not SUPABASE_URL:
 if not SUPABASE_KEY:
     sys.exit("SUPABASE_KEY not set in .env")
 
-DEFAULT_PREFIX = "@mention"
+DEFAULT_PREFIX = "m."
 
 INITIAL_EXTENSIONS = [
     "cogs.phone",
@@ -61,16 +61,14 @@ class Musubi(MusubiBot):
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
-        # members intent intentionally omitted — never used in this codebase,
-        # but enabling it causes discord.py to cache every member of every guild
-        # the bot is in, which is the single largest RAM consumer on a busy network.
+        intents.members = True
 
         super().__init__(
             command_prefix=resolve_prefix,
             help_command=None,
             intents=intents,
             owner_id=OWNER_ID,
-            max_messages=100,   # was 1_000 — bridge only needs delete relay, 100 is plenty
+            max_messages=1_000,
             chunk_guilds_at_startup=False,
         )
 
@@ -120,6 +118,41 @@ class Musubi(MusubiBot):
             )
         )
 
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        """DM the server owner a welcome embed when Musubi joins."""
+        owner = guild.owner
+        if not owner:
+            if not guild.owner_id:
+                return
+            try:
+                owner = await self.fetch_user(guild.owner_id)
+            except Exception:
+                return
+
+        bot_avatar = str(self.user.display_avatar.url) if self.user else None
+        embed = Embeds.welcome(bot_avatar)
+
+        try:
+            await owner.send(embed=embed)
+            log.info("Welcome DM sent — guild:%d owner:%d", guild.id, owner.id)
+        except (discord.Forbidden, discord.HTTPException):
+            log.info("Welcome DM blocked — owner:%d, falling back to first channel", owner.id)
+            # Fall back to the first channel the bot can send messages in
+            channel = next(
+                (
+                    c for c in guild.text_channels
+                    if c.permissions_for(guild.me).send_messages
+                ),
+                None,
+            )
+            if channel:
+                try:
+                    await channel.send(embed=embed)
+                    log.info("Welcome embed sent to channel:%d guild:%d", channel.id, guild.id)
+                except discord.HTTPException as e:
+                    log.warning("Welcome fallback failed — guild:%d: %s", guild.id, e)
+
     async def on_command_error(self, ctx: commands.Context[BotT], exception: commands.CommandError, /) -> None:
         error = exception
 
@@ -127,7 +160,6 @@ class Musubi(MusubiBot):
             return
 
         if isinstance(error, commands.CheckFailure):
-            # Check failures send their own embed in the predicate — no fallback needed
             return
 
         if isinstance(error, commands.MissingRequiredArgument):
@@ -180,7 +212,6 @@ class Musubi(MusubiBot):
             )
             return
 
-        # Unwrap hybrid command errors and log the unexpected ones
         original = getattr(error, "original", error)
         log.exception(
             "Unhandled error in command '%s' by user %d: %s",
@@ -199,7 +230,6 @@ class Musubi(MusubiBot):
 
     async def close(self) -> None:
         log.info("Shutting down.")
-        await self.data.close()
         await super().close()
 
 
@@ -209,6 +239,7 @@ def resolve_prefix(bot: Musubi, message: discord.Message) -> list[str]:
       1. @mention  — always works
       2. User personal prefix — premium users, works everywhere including DMs
       3. Guild prefix — server-specific, guild messages only
+      4. Default prefix — m.
     Both user and guild prefix are included when set so either works simultaneously.
     Duplicates are deduplicated (e.g. if user and guild set the same prefix).
     """
@@ -230,7 +261,11 @@ def resolve_prefix(bot: Musubi, message: discord.Message) -> list[str]:
             if guild_pfx not in extra:
                 extra.append(guild_pfx)
 
-    return mention_prefixes + extra if extra else mention_prefixes
+    # Default prefix — always available as fallback
+    if DEFAULT_PREFIX not in extra:
+        extra.append(DEFAULT_PREFIX)
+
+    return mention_prefixes + extra
 
 
 def setup_logging() -> None:
