@@ -290,17 +290,20 @@ class Embeds:
     @staticmethod
     def callboard(
         rows: list[dict],
-        guilds: list[tuple[str, str | None]],
+        guilds: list[tuple[str, str | None, str | None]],
         cycle_started: str,
     ) -> discord.Embed:
         MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣"]
         lines: list[str] = []
-        for i, (row, (name, icon_url)) in enumerate(zip(rows, guilds)):
+        for i, (row, (name, icon_url, invite_url)) in enumerate(zip(rows, guilds)):
             medal = MEDALS[i] if i < len(MEDALS) else f"`#{i+1}`"
             xp    = row.get("xp") or 0
-            lines.append(f"> {medal} **{name}** — `{xp:,} XP`")
+            entry = f"> {medal} **{name}** — `{xp:,} XP`"
+            if invite_url:
+                entry += f" • [Join]({invite_url})"
+            lines.append(entry)
 
-        first_icon = next((icon for _, icon in guilds if icon), None)
+        first_icon = next((icon for _, icon, _ in guilds if icon), None)
 
         embed = discord.Embed(
             description="> `🏆` *Callboard — Current Cycle*\n\n" + "\n".join(lines),
