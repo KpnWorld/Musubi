@@ -16,8 +16,6 @@ from embeds import Embeds
 
 log = logging.getLogger("musubi.config")
 
-_pending_unregister: set[int] = set()
-
 
 def is_manager():
     async def predicate(ctx: commands.Context[MusubiBot]) -> bool:
@@ -45,6 +43,45 @@ async def _get_or_create_webhook(channel: discord.TextChannel) -> discord.Webhoo
     if existing:
         return existing
     return await channel.create_webhook(name="Musubi Bridge")
+
+
+# ── Unregister confirmation view ──────────────────────────────────────────────
+
+class UnregisterView(discord.ui.View):
+    """Button prompt — confirm or cancel server unregistration."""
+
+    def __init__(self, author_id: int) -> None:
+        super().__init__(timeout=30)
+        self.author_id = author_id
+        self.confirmed = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                embed=Embeds.error("Only the person who ran this command can confirm."),
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Yes, remove this server", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.confirmed = True
+        self.stop()
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✕")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.confirmed = False
+        self.stop()
+        await interaction.response.edit_message(
+            embed=Embeds.info("Unregister cancelled."),
+            view=None,
+        )
+
+    async def on_timeout(self) -> None:
+        self.confirmed = False
+        self.stop()
 
 
 class Config(commands.Cog):
@@ -107,7 +144,6 @@ class Config(commands.Cog):
             await self.data.set_guild_invite(ctx.guild.id, invite.url)
         except (discord.Forbidden, discord.HTTPException) as e:
             log.warning("setup: invite creation failed guild:%d — %s", ctx.guild.id, e)
-            # Non-fatal — will be lazily created on first /invite use
 
         log.info("Guild registered — id:%d booth:%d", ctx.guild.id, channel.id)
         await ctx.send(
@@ -250,21 +286,13 @@ class Config(commands.Cog):
 
     @commands.hybrid_command(name="unregister", description="Remove this server from Musubi.")
     @is_manager()
-    async def unregister(
-        self,
-        ctx: commands.Context[MusubiBot],
-        confirm: bool = False,
-    ) -> None:
+    async def unregister(self, ctx: commands.Context[MusubiBot]) -> None:
         """
         Unregister this server from Musubi, removing all server data.
-        Run with confirm:True to skip the confirmation prompt.
-
-        Parameters
-        ----------
-        confirm: bool
-            Set to True to confirm removal. Defaults to False (shows warning).
+        Shows a button confirmation prompt before proceeding.
         """
         assert ctx.guild is not None
+
         if not self.data.is_guild_registered(ctx.guild.id):
             await ctx.send(
                 embed=Embeds.error("This server is not registered with Musubi."),
@@ -272,34 +300,32 @@ class Config(commands.Cog):
             )
             return
 
-        if not confirm:
-            _pending_unregister.add(ctx.guild.id)
-            await ctx.send(
-                embed=Embeds.info(
-                    "⚠️ This will permanently remove **all data** for this server, "
-                    "including the booth channel, XP, and premium.\n\n"
-                    "Run `/unregister confirm:True` to confirm."
-                ),
-                ephemeral=True,
-            )
-            return
+        view = UnregisterView(ctx.author.id)
 
-        if ctx.guild.id not in _pending_unregister:
-            await ctx.send(
-                embed=Embeds.info(
-                    "Please run `/unregister` first to see the warning, "
-                    "then confirm with `/unregister confirm:True`."
-                ),
-                ephemeral=True,
-            )
+        warning = discord.Embed(
+            description=(
+                "> `⚠️` *Are you sure you want to remove this server from Musubi?*\n\n"
+                "> This will permanently remove **all data** for this server —\n"
+                "> booth channel, XP, premium, and invite quota.\n\n"
+                "> *This action cannot be undone.*"
+            ),
+            color=0xFF4444,
+        )
+        msg = await ctx.send(embed=warning, view=view, ephemeral=True)
+
+        await view.wait()
+
+        if not view.confirmed:
+            # Timeout path — cancel button already edits the message itself
+            if view.confirmed is False and not view.is_finished():
+                await msg.edit(embed=Embeds.info("Unregister cancelled."), view=None)
             return
 
         await self.data.unregister_guild(ctx.guild.id)
-        _pending_unregister.discard(ctx.guild.id)
-        log.info("Guild unregistered — id:%d", ctx.guild.id)
-        await ctx.send(
+        log.info("Guild unregistered — id:%d by:%d", ctx.guild.id, ctx.author.id)
+        await msg.edit(
             embed=Embeds.action("This server has been removed from Musubi. Goodbye!", ctx.author),
-            ephemeral=True,
+            view=None,
         )
 
 

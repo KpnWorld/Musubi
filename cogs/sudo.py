@@ -660,7 +660,7 @@ class Sudo(commands.Cog):
     @commands.group(name="guilds", invoke_without_command=True)
     async def guilds_group(self, ctx: commands.Context[Any]) -> None:
         await ctx.send(
-            embed=Embeds.info("Available subcommands: `list [page]`, `info <guild_id>`"),
+            embed=Embeds.info("Available subcommands: `list [page]`, `info <guild_id>`, `remove <guild_id>`"),
             ephemeral=True,
         )
 
@@ -710,7 +710,7 @@ class Sudo(commands.Cog):
             return
 
         discord_guild = self.bot.get_guild(int(guild_id))
-        name          = discord_guild.name if discord_guild else f"Not in cache"
+        name          = discord_guild.name if discord_guild else "Not in cache"
         members       = discord_guild.member_count if discord_guild else "—"
         icon          = discord_guild.icon.url if discord_guild and discord_guild.icon else None
 
@@ -742,6 +742,43 @@ class Sudo(commands.Cog):
             embed.set_thumbnail(url=str(icon))
         embed.set_footer(text=f"Requested by {ctx.author.display_name}")
         await ctx.send(embed=embed, ephemeral=True)
+
+    @guilds_group.command(name="remove")
+    async def guilds_remove(self, ctx: commands.Context[Any], guild_id: str) -> None:
+        """Remotely unregister a guild from the network by ID."""
+        if not self.data.is_guild_registered(guild_id):
+            await ctx.send(
+                embed=Embeds.error(f"Guild `{guild_id}` is not registered on the network."),
+                ephemeral=True,
+            )
+            return
+
+        discord_guild = self.bot.get_guild(int(guild_id))
+        name          = discord_guild.name if discord_guild else guild_id
+
+        # End any active or searching session before removing
+        try:
+            session = await self.data.get_active_session(guild_id)
+            if session:
+                from cogs.phone import Phone
+                phone_cog = self.bot.cogs.get("Phone")
+                if phone_cog and isinstance(phone_cog, Phone):
+                    await phone_cog._notify_end(session, reason="terminate")
+                    await phone_cog._end_session_cleanup(session)
+                await self.data.end_session(session["id"])
+            else:
+                searching = await self.data.get_searching_session(guild_id)
+                if searching:
+                    await self.data.end_session(searching["id"], status="cancelled")
+        except Exception as e:
+            log.warning("guilds_remove: session cleanup failed for %s — %s", guild_id, e)
+
+        await self.data.unregister_guild(guild_id)
+        log.info("Guild remotely unregistered — %s by %d", guild_id, ctx.author.id)
+        await ctx.send(
+            embed=Embeds.action(f"**{name}** (`{guild_id}`) has been removed from the network.", ctx.author),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: MusubiBot) -> None:
